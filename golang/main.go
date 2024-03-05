@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func initExporter() *otlptrace.Exporter {
@@ -35,14 +36,11 @@ func initExporter() *otlptrace.Exporter {
 func HelloHandler(c *gin.Context) {
 	// Get the tracer from the global provider
 	// Start a span
-	tracer := otel.GetTracerProvider().Tracer("ServiceA")
-	ctx, span := tracer.Start(c, "HelloHandler")
+	span := trace.SpanFromContext(c)
+	ctx := trace.ContextWithSpan(c, span)
 	defer span.End()
-
-	span.SetAttributes(semconv.HTTPMethodKey.String("GET"))
-	span.SetAttributes(semconv.HTTPURLKey.String("http://localhost:5001/hello"))
-
-	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5001/hello", nil)
+	span.AddEvent("handling the request")
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5001/", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		span.RecordError(err)
@@ -50,9 +48,6 @@ func HelloHandler(c *gin.Context) {
 		return
 	}
 	defer resp.Body.Close()
-
-	span.SetAttributes(semconv.HTTPStatusCodeKey.Int(resp.StatusCode))
-
 	log.Printf("Service B response: %v", resp.Status)
 
 	// Respond with "Hello, World!"
