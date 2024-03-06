@@ -115,8 +115,8 @@ func UserDatabase(ctx context.Context) (map[string]string, error) {
 	span.AddEvent("user fetch done")
 
 	return map[string]string{
-		"user1": "chandan",
-		"user2": "saurabh",
+		"user1": "hpe-user1",
+		"user2": "hpe-user2",
 	}, nil
 }
 

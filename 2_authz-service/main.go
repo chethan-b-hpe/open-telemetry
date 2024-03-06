@@ -42,9 +42,8 @@ func main() {
 	}
 }
 
-// HelloHandler is the handler for the /hello route
-// AuthzHandler is the handler for the /verify route
 func AuthzHandler(c *gin.Context) {
+
 	// Extract the context from the incoming request
 	// propagator := otel.GetTextMapPropagator()
 	// parentCtx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
