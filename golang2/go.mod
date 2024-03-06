@@ -1,4 +1,4 @@
-module test-jaeger
+module test-newrelic
 
 go 1.19
 
