@@ -2,86 +2,179 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
-	"go.opentelemetry.io/otel/trace"
 )
 
-func initExporter() *otlptrace.Exporter {
+// newRelicProvider creates a new Relic provider
+func newRelicProvider(ctx context.Context) *sdktrace.TracerProvider {
+	var exp sdktrace.SpanExporter
+	var err error
+
+	exp, err = otlptracehttp.New(ctx)
+	if err != nil {
+		panic(err)
+	}
+
+	// Instantiate a default resource with environment variables
+	r := resource.Default()
+
+	// Create trace provider
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(r),
+	)
+
+	// Set global trace provider
+	otel.SetTracerProvider(tp)
+
+	// Set trace propagator
+	otel.SetTextMapPropagator(
+		propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		))
+
+	return tp
+}
+
+func shutdownTraceProvider(
+	ctx context.Context,
+	tp *sdktrace.TracerProvider,
+) {
+	// Do not make the application hang when it is shutdown.
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	if err := tp.Shutdown(ctx); err != nil {
+		panic(err)
+	}
+}
+
+func jaegerProvider(ctx context.Context) *sdktrace.TracerProvider {
 	// Create and configure the OTLP exporter to send traces to the collector
-	exporter, err := otlptracegrpc.New(context.Background(), otlptracegrpc.WithEndpointURL("http://localhost:4317/api/traces"))
+	exporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("failed to create OTLP exporter: %v", err)
-		return nil
 	}
+
 	// Create a new trace provider with the exporter
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("ServiceA"))))
 	otel.SetTracerProvider(provider)
 
-	return exporter
+	return provider
 }
 
-// HelloHandler is the handler for the /hello route
-func HelloHandler(c *gin.Context) {
-	r := c.Request
-	// Get the tracer from the global provider
-	// Start a span
-	span := trace.SpanFromContext(c)
-	ctx := trace.ContextWithSpan(c, span)
-	defer span.End()
-	span.AddEvent("handling the request")
-	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5001/", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		span.RecordError(err)
-		c.String(http.StatusInternalServerError, "Error calling Service A: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	fmt.Println(" Service B:  Spanning")
-	// Start an internal child span for Fibonacci calculation
-	_, span1 := trace.SpanFromContext(r.Context()).
-		TracerProvider().
-		Tracer("Vipin-http").
-		Start(
-			r.Context(),
-			"Vipin-NewRelic",
-			trace.WithSpanKind(trace.SpanKindInternal),
-		)
-
-	defer span1.End()
-
-	log.Printf("Service B response: %v", resp.Status)
-
-	// Respond with "Hello, World!"
-	c.String(http.StatusOK, "Hello, World!")
-}
 func main() {
-	// Create and configure the OTLP exporter to send traces to the collector
-	expoter := initExporter()
-	defer expoter.Shutdown(context.Background())
+
+	ctx := context.Background()
+	// get the jaeger provider
+	jagerProvider := jaegerProvider(ctx)
+	defer shutdownTraceProvider(ctx, jagerProvider)
+
+	// get new relic provider
+	// newRelicProvider := newRelicProvider(ctx)
+	// defer shutdownTraceProvider(ctx, newRelicProvider)
 
 	// Create a new Gin router
 	r := gin.Default()
 
 	// Define route handlers
-	r.GET("/hello", HelloHandler)
+	r.GET("/users", UserHandler)
 
 	// Start HTTP server
-	fmt.Println("Server started on :5000")
+	log.Info("Server started on :5000")
 	if err := http.ListenAndServe(":5000", r); err != nil {
 		log.Fatalf("failed to start server: %v", err)
 	}
+}
+
+// UserDatabase is the handler for the /users route
+func UserDatabase(ctx context.Context) (map[string]string, error) {
+	// Get the tracer from the global provider
+	tracer := otel.Tracer("user-database")
+	// Start a span
+	ctx, span := tracer.Start(ctx, "UserDatabase")
+	defer ctx.Done()
+	defer span.End()
+
+	span.AddEvent("user fetch done")
+
+	return map[string]string{
+		"user1": "chandan",
+		"user2": "saurabh",
+	}, nil
+}
+
+// UserService is the handler for the /users route
+func UserService(ctx context.Context) (map[string]string, error) {
+	// Get the tracer from the global provider
+	tracer := otel.Tracer("user-service")
+	// Start a span
+	ctx, span := tracer.Start(ctx, "UserService")
+	defer span.End()
+
+	span.AddEvent("user verification done")
+	userdetails, err := UserDatabase(ctx)
+	if err != nil {
+		span.RecordError(err)
+		return userdetails, err
+	}
+	return userdetails, nil
+
+}
+
+// HelloHandler is the handler for the /hello route
+func UserHandler(c *gin.Context) {
+	log.Info("Got a request to get /users")
+	// Get the tracer from the global provider
+	tracer := otel.GetTracerProvider().Tracer("user-handler")
+	// Start a span
+	ctx, span := tracer.Start(c.Request.Context(), "UserHandler")
+	defer span.End()
+	span.AddEvent("handling get /users request")
+
+	// Call the authz service
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5001/verify", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		span.RecordError(err)
+		log.Printf("Error calling authz service: %v", err)
+		c.String(http.StatusInternalServerError, "Error calling authz service: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	log.Info("Authz service response: ", resp.Status)
+
+	// Add an attribute to the span
+	span.SetAttributes(semconv.HTTPMethodKey.String("GET"))
+	userdetails, err := UserService(ctx)
+	if err != nil {
+		span.RecordError(err)
+		log.Printf("Error calling user service: %v", err)
+		c.String(http.StatusInternalServerError, "Error calling user service: %v", err)
+		return
+	}
+	span.AddEvent("getting user details")
+
+	// Set some attributes on the span
+	// span.SetAttributes(semconv.ServiceNameKey.String("sample-service"))
+
+	// Respond with "Hello, World!"
+	// return user json response
+
+	c.JSON(http.StatusOK, userdetails)
+
 }
