@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -109,6 +110,49 @@ func Handler(c *gin.Context) {
 		Start(ctx, r.Method+" /hello", startSpanAttributes...)
 	defer span.End()
 
+	endSpanAttributes := []attribute.KeyValue{semconv.HTTPStatusCode(200)}
+	span.SetAttributes(endSpanAttributes...)
+
+	// ------------------------------------
+
+	// Create response writer wrapper
+	// rww := NewResponseWriterWrapper(w)
+	// h.handler.ServeHTTP(rww, r.WithContext(ctx))
+
+	// // Set up metric attributes
+	// httpServerMetricAttributes := httpconv.ServerRequest(h.serverName, r)
+	// fibonacciInvocationMetricAttributes := []attribute.KeyValue{}
+
+	// if rww.statusCode > 0 {
+	// 	// Add status code to metric attributes
+	// 	httpServerMetricAttributes = append(
+	// 		httpServerMetricAttributes,
+	// 		semconv.HTTPStatusCode(rww.statusCode),
+	// 	)
+	// 	if rww.statusCode == 200 {
+	// 		fibonacciInvocationMetricAttributes = append(
+	// 			fibonacciInvocationMetricAttributes,
+	// 			attribute.Bool("fibonacci.valid.n", true),
+	// 		)
+	// 	} else {
+	// 		fibonacciInvocationMetricAttributes = append(
+	// 			fibonacciInvocationMetricAttributes,
+	// 			attribute.Bool("fibonacci.valid.n", false),
+	// 		)
+	// 	}
+
+	// 	// Add status code to span attributes
+	// 	endSpanAttributes := []attribute.KeyValue{semconv.HTTPStatusCode(rww.statusCode)}
+	// 	span.SetAttributes(endSpanAttributes...)
+	// }
+
+	// // Use floating point division here for higher precision (instead of Millisecond method).
+	// elapsedTime := float64(time.Since(requestStartTime)) / float64(time.Millisecond)
+
+	// h.fibonacciInvocations.Add(ctx, 1, metric.WithAttributes(fibonacciInvocationMetricAttributes...))
+	// h.httpServerDuration.Record(ctx, elapsedTime, metric.WithAttributes(httpServerMetricAttributes...))
+
+	// ------------------------------------
 	// Get the tracer from the global provider
 	// tracer := otel.GetTracerProvider().Tracer("serviceB")
 
