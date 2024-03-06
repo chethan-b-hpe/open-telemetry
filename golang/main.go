@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // newRelicProvider creates a new Relic provider
@@ -71,7 +73,7 @@ func jaegerProvider(ctx context.Context) *sdktrace.TracerProvider {
 	// Create a new trace provider with the exporter
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("ServiceA"))))
+		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("User-Service"))))
 	otel.SetTracerProvider(provider)
 
 	return provider
@@ -142,12 +144,23 @@ func UserHandler(c *gin.Context) {
 	// Get the tracer from the global provider
 	tracer := otel.GetTracerProvider().Tracer("user-handler")
 	// Start a span
-	ctx, span := tracer.Start(c.Request.Context(), "UserHandler")
+	ctx, span := tracer.Start(context.Background(), "UserHandler")
 	defer span.End()
 	span.AddEvent("handling get /users request")
+	currentSpan := trace.SpanFromContext(ctx)
+	currentTraceID := currentSpan.SpanContext().TraceID()
+	currentSpanID := currentSpan.SpanContext().SpanID()
+	// Print the extracted information
+	fmt.Printf("Current Trace ID: %s\n", currentTraceID)
+	fmt.Printf("Current Span ID: %s\n", currentSpanID)
+	// Inject the trace context into the HTTP request headers
 
 	// Call the authz service
 	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5001/verify", nil)
+	req = req.WithContext(ctx)
+	req.Header.Set("TraceID", currentTraceID.String())
+	req.Header.Set("SpanID", currentSpanID.String())
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		span.RecordError(err)
