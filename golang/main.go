@@ -34,6 +34,7 @@ func initExporter() *otlptrace.Exporter {
 
 // HelloHandler is the handler for the /hello route
 func HelloHandler(c *gin.Context) {
+	r := c.Request
 	// Get the tracer from the global provider
 	// Start a span
 	span := trace.SpanFromContext(c)
@@ -48,6 +49,20 @@ func HelloHandler(c *gin.Context) {
 		return
 	}
 	defer resp.Body.Close()
+
+	fmt.Println(" Service B:  Spanning")
+	// Start an internal child span for Fibonacci calculation
+	_, span1 := trace.SpanFromContext(r.Context()).
+		TracerProvider().
+		Tracer("Vipin-http").
+		Start(
+			r.Context(),
+			"Vipin-NewRelic",
+			trace.WithSpanKind(trace.SpanKindInternal),
+		)
+
+	defer span1.End()
+
 	log.Printf("Service B response: %v", resp.Status)
 
 	// Respond with "Hello, World!"
