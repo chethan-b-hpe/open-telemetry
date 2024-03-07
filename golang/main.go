@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/gin-gonic/gin"
+	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -79,14 +83,17 @@ func jaegerProvider(ctx context.Context) *sdktrace.TracerProvider {
 
 func main() {
 
+	// var err error
+	// password:= "vipin"
+
 	ctx := context.Background()
 	// get the jaeger provider
-	jagerProvider := jaegerProvider(ctx)
-	defer shutdownTraceProvider(ctx, jagerProvider)
+	// jagerProvider := jaegerProvider(ctx)
+	// defer shutdownTraceProvider(ctx, jagerProvider)
 
 	// get new relic provider
-	// newRelicProvider := newRelicProvider(ctx)
-	// defer shutdownTraceProvider(ctx, newRelicProvider)
+	newRelicProvider := newRelicProvider(ctx)
+	defer shutdownTraceProvider(ctx, newRelicProvider)
 
 	// Create a new Gin router
 	r := gin.Default()
@@ -103,19 +110,66 @@ func main() {
 
 // UserDatabase is the handler for the /users route
 func UserDatabase(ctx context.Context) (map[string]string, error) {
+	userData := make(map[string]string)
+	db, err := sql.Open("postgres", "postgres://vipin:vipin@localhost/postgres?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Get the tracer from the global provider
 	tracer := otel.Tracer("user-database")
 	// Start a span
-	ctx, span := tracer.Start(ctx, "UserDatabase")
+	ctx, span := tracer.Start(context.Background(), "DB-Transactions")
 	defer ctx.Done()
 	defer span.End()
 
+	// Start a new transaction to trace
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Create
+	_, err = db.Exec("INSERT INTO users(name, email) VALUES($1, $2)", "Sheru1", "sheru@example.com")
+	if err != nil {
+		log.Printf("Error creating user: %v", err)
+	}
+	err = tx.Commit()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Start a new transaction to trace
+	tx1, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Read
+	rows, err := db.Query("SELECT name, email FROM users")
+	if err != nil {
+		log.Printf("Error reading users: %v", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, email string
+		err = rows.Scan(&name, &email)
+		if err != nil {
+			log.Printf("Error scanning row: %v", err)
+		}
+		fmt.Println(name, email)
+		userData[name] = email
+	}
+
+	err = tx1.Commit()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	span.AddEvent("user fetch done")
 
-	return map[string]string{
-		"user1": "chandan",
-		"user2": "saurabh",
-	}, nil
+	return userData, nil
 }
 
 // UserService is the handler for the /users route
