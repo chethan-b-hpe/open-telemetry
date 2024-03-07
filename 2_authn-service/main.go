@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -26,14 +25,14 @@ func main() {
 	// Create a new trace provider with the exporter
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("authz-service"))))
+		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("authn-service"))))
 	otel.SetTracerProvider(provider)
 
 	// Create a new Gin router
 	r := gin.Default()
 
 	// Define route handlers
-	r.GET("/verify", AuthzHandler)
+	r.GET("/verify", AuthnHandler)
 
 	// Start HTTP server
 	log.Info("Server started on :5001")
@@ -42,15 +41,11 @@ func main() {
 	}
 }
 
-func AuthzHandler(c *gin.Context) {
-
-	// Extract the context from the incoming request
-	// propagator := otel.GetTextMapPropagator()
-	// parentCtx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
+func AuthnHandler(c *gin.Context) {
+	log.Info("Got a /verify request in authn-service")
+	// Extract the trace ID and span ID from the incoming request
 	traceID := c.Request.Header.Get("TraceID")
 	spanID := c.Request.Header.Get("SpanID")
-	fmt.Printf("Parent-TraceID: %s\n", traceID)
-	fmt.Printf("SpanID 1: %s\n", spanID)
 	// Convert the trace ID and span ID from strings to their appropriate types
 	tID, _ := trace.TraceIDFromHex(traceID)
 	sID, _ := trace.SpanIDFromHex(spanID)
@@ -62,30 +57,24 @@ func AuthzHandler(c *gin.Context) {
 		Remote:     true,
 	})
 	ctx := trace.ContextWithRemoteSpanContext(context.Background(), sc)
-
 	// Get the tracer from the global provider
-	tracer := otel.GetTracerProvider().Tracer("authz-handler")
-
+	tracer := otel.GetTracerProvider().Tracer("authn-handler")
 	// Start a new span with the extracted context
-	_, span := tracer.Start(ctx, "AuthzHandler")
+	_, span := tracer.Start(ctx, "AuthnHandler")
 	defer span.End()
-
 	currentSpan := trace.SpanFromContext(ctx)
 	currentTraceID := currentSpan.SpanContext().TraceID()
 	currentSpanID := currentSpan.SpanContext().SpanID()
 	// Print the extracted information
-	fmt.Printf("Current Trace ID: %s\n", currentTraceID)
-	fmt.Printf("Current Span ID: %s\n", currentSpanID)
-	span.AddEvent("handling the /verify request in authz-service")
-
+	log.Infof("Current Trace ID: %s\n", currentTraceID)
+	log.Infof("Current Span ID: %s\n", currentSpanID)
+	span.AddEvent("Got a request to verify the request in authn-service")
 	// Add an attribute to the span
 	span.SetAttributes(semconv.HTTPMethodKey.String("GET"))
-
-	span.AddEvent("verified the request in authz-service")
-
-	// Set some attributes on the span
-	span.SetAttributes(semconv.ServiceNameKey.String("authz-service"))
-
-	// Respond with "user verified successfully!"
-	c.String(http.StatusOK, "user verified successfully!")
+	span.SetAttributes(semconv.HTTPURLKey.String("/users"))
+	span.SetAttributes(semconv.ServiceNameKey.String("authn-service"))
+	// Add an event to the span
+	span.AddEvent("Succefully verified the request in authn-service")
+	// Return a response
+	c.JSON(http.StatusOK, nil)
 }
