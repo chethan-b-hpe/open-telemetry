@@ -3,18 +3,21 @@ package main
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.10.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
-func main() {
+func jaegerProvider(ctx context.Context) *sdktrace.TracerProvider {
 	// Create and configure the OTLP exporter to send traces to the collector
 	exporter, err := otlptracegrpc.New(context.Background(), otlptracegrpc.WithEndpointURL("http://localhost:4317/api/traces"))
 	if err != nil {
@@ -27,6 +30,78 @@ func main() {
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("authn-service"))))
 	otel.SetTracerProvider(provider)
+
+	return provider
+}
+
+// newRelicProvider creates a new Relic provider
+func newRelicProvider(ctx context.Context) *sdktrace.TracerProvider {
+	var exp sdktrace.SpanExporter
+	var err error
+
+	exp, err = otlptracehttp.New(ctx)
+	if err != nil {
+		panic(err)
+	}
+
+	// Instantiate a default resource with environment variables
+	r := resource.Default()
+
+	// Create trace provider
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(r),
+	)
+
+	// Set global trace provider
+	otel.SetTracerProvider(tp)
+
+	// Set trace propagator
+	otel.SetTextMapPropagator(
+		propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		))
+
+	return tp
+}
+
+func shutdownTraceProvider(
+	ctx context.Context,
+	tp *sdktrace.TracerProvider,
+) {
+	// Do not make the application hang when it is shutdown.
+	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+	defer cancel()
+	if err := tp.Shutdown(ctx); err != nil {
+		panic(err)
+	}
+}
+
+func main() {
+	ctx := context.Background()
+
+	// // Create and configure the OTLP exporter to send traces to the collector
+	// exporter, err := otlptracegrpc.New(context.Background(), otlptracegrpc.WithEndpointURL("http://localhost:4317/api/traces"))
+	// if err != nil {
+	// 	log.Fatalf("failed to create OTLP exporter: %v", err)
+	// }
+	// defer exporter.Shutdown(context.Background())
+
+	// // Create a new trace provider with the exporter
+	// provider := sdktrace.NewTracerProvider(
+	// 	sdktrace.WithBatcher(exporter),
+	// 	sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("authz-service"))))
+	// otel.SetTracerProvider(provider)
+
+	// get the jaeger provider
+	// jagerProvider := jaegerProvider(ctx)
+	// defer shutdownTraceProvider(ctx, jagerProvider)
+
+	// get new relic provider
+	newRelicProvider := newRelicProvider(ctx)
+	defer shutdownTraceProvider(ctx, newRelicProvider)
 
 	// Create a new Gin router
 	r := gin.Default()
