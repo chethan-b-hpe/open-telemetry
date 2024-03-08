@@ -21,6 +21,7 @@ import (
 )
 
 var URL string
+var TraceProvider string
 
 // newRelicProvider creates a new Relic provider
 func newRelicProvider(ctx context.Context) *sdktrace.TracerProvider {
@@ -77,25 +78,29 @@ func jaegerProvider(ctx context.Context) *sdktrace.TracerProvider {
 	// Create a new trace provider with the exporter
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("user-service"))))
+		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("App1"))))
+	otel.SetTracerProvider(provider)
+
+	return provider
+}
+
+func opsrampProvider(ctx context.Context) *sdktrace.TracerProvider {
+	// Create and configure the OTLP exporter to send traces to the collector
+	exporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("failed to create OTLP exporter: %v", err)
+	}
+
+	// Create a new trace provider with the exporter
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(resource.NewWithAttributes("", semconv.ServiceNameKey.String("App1"))))
 	otel.SetTracerProvider(provider)
 
 	return provider
 }
 
 func main() {
-
-	ctx := context.Background()
-	// get the jaeger provider
-	jagerProvider := jaegerProvider(ctx)
-	defer shutdownTraceProvider(ctx, jagerProvider)
-
-	// get new relic provider
-	// newRelicProvider := newRelicProvider(ctx)
-	// defer shutdownTraceProvider(ctx, newRelicProvider)
-
-	// Create a new Gin router
-	r := gin.Default()
 
 	// Get the environment variable
 	if len(os.Args) < 2 {
@@ -106,8 +111,31 @@ func main() {
 	URL = os.Args[1]
 	log.Info("Received URL: ", URL)
 
+	TraceProvider = os.Args[2]
+	log.Info("Received TraceProvider: ", TraceProvider)
+
+	// check if the trace provider is newrelic or jaeger or opsramp
+	var traceProvider *sdktrace.TracerProvider
+	ctx := context.Background()
+
+	// switch case to check the trace provider
+	switch TraceProvider {
+	case "newrelic":
+		traceProvider = newRelicProvider(ctx)
+	case "jaeger":
+		traceProvider = jaegerProvider(ctx)
+	case "opsramp":
+		traceProvider = opsrampProvider(ctx)
+	default:
+		traceProvider = jaegerProvider(ctx)
+	}
+	defer shutdownTraceProvider(ctx, traceProvider)
+
+	// Create a new Gin router
+	r := gin.Default()
+
 	// Define route handlers
-	r.GET("/users", UserHandler)
+	r.GET("/", HandlerLayer)
 
 	// Start HTTP server
 	log.Info("Server started on :5000")
@@ -116,31 +144,31 @@ func main() {
 	}
 }
 
-// UserDatabase is the handler for the /users route
-func UserDatabase(ctx context.Context) (map[string]string, error) {
+// Database is the handler for the / route
+func Database(ctx context.Context) (map[string]string, error) {
 	// Get the tracer from the global provider
-	tracer := otel.Tracer("user-database")
+	tracer := otel.Tracer("app1-database-layer")
 	// Start a span
-	ctx, span := tracer.Start(ctx, "UserDatabase")
+	ctx, span := tracer.Start(ctx, "App1-DatabaseLayer")
 	defer ctx.Done()
 	defer span.End()
 
-	span.AddEvent("Fetching user details from database")
+	span.AddEvent("Fetching records from database")
 	// Simulate a database call
 	time.Sleep(100 * time.Millisecond)
-	span.AddEvent("Successfully fetched user details from database")
+	span.AddEvent("Successfully fetched records from database")
 	return map[string]string{
 		"user1": "hpe-user1",
 		"user2": "hpe-user2",
 	}, nil
 }
 
-// UserService is the handler for the /users route
-func UserService(ctx context.Context) (map[string]string, error) {
+// Service is the handler for the / route
+func ServiceLayer(ctx context.Context) (map[string]string, error) {
 	// Get the tracer from the global provider
-	tracer := otel.Tracer("user-service")
+	tracer := otel.Tracer("app1-service-layer")
 	// Start a span
-	ctx, span := tracer.Start(ctx, "UserService")
+	ctx, span := tracer.Start(ctx, "App1-ServiceLayer")
 	defer span.End()
 
 	currentSpan := trace.SpanFromContext(ctx)
@@ -150,8 +178,8 @@ func UserService(ctx context.Context) (map[string]string, error) {
 	log.Infof("Current Trace ID: %s\n", currentTraceID)
 	log.Infof("Current Span ID: %s\n", currentSpanID)
 	// Inject the trace context into the HTTP request headers
-	span.AddEvent("Calling authn service")
-	// Call the authz service
+	span.AddEvent("Calling app2 service")
+	// Call the app2 service
 	req, _ := http.NewRequestWithContext(ctx, "GET", URL, nil)
 	req = req.WithContext(ctx)
 	req.Header.Set("TraceID", currentTraceID.String())
@@ -159,14 +187,14 @@ func UserService(ctx context.Context) (map[string]string, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Error("Failed to call authz service")
-		span.RecordError(errors.New("Failed to call authz service"))
+		log.Error("Failed to call app2 service")
+		span.RecordError(errors.New("Failed to call app2 service"))
 		span.SetAttributes(semconv.HTTPStatusCodeKey.Int(500))
-		span.SetStatus(codes.Error, "Failed to call authz service")
+		span.SetStatus(codes.Error, "Failed to call app2 service")
 		return nil, err
 	}
 	defer resp.Body.Close()
-	log.Info("Authz service response: ", resp.Status)
+	log.Info("app2 service response: ", resp.Status)
 	if resp.StatusCode != http.StatusOK {
 		log.Error("Invalid Request")
 		span.RecordError(errors.New("Invalid Request"))
@@ -174,41 +202,39 @@ func UserService(ctx context.Context) (map[string]string, error) {
 		span.SetStatus(codes.Error, "Invalid Request")
 		return nil, errors.New("Invalid Request")
 	}
-	span.AddEvent("Successfully verified the request from authn service")
-	userdetails, err := UserDatabase(ctx)
+	response, err := Database(ctx)
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(semconv.HTTPStatusCodeKey.Int(500))
 		span.SetStatus(codes.Error, err.Error())
-		return userdetails, err
+		return response, err
 	}
-	return userdetails, nil
+	return response, nil
 
 }
 
 // HelloHandler is the handler for the /hello route
-func UserHandler(c *gin.Context) {
-	log.Info("Got a request to get users")
+func HandlerLayer(c *gin.Context) {
+	log.Info("Got a get request")
 	// Get the tracer from the global provider
-	tracer := otel.GetTracerProvider().Tracer("user-handler")
+	tracer := otel.GetTracerProvider().Tracer("app1-handler-layer")
 	// Start a span
-	ctx, span := tracer.Start(context.Background(), "UserHandler")
+	ctx, span := tracer.Start(context.Background(), "App1-HandlerLayer")
 	defer span.End()
-	span.AddEvent("Got a request to get users")
+	span.AddEvent("Got a get request")
 	// Add an attribute to the span
 	span.SetAttributes(semconv.HTTPMethodKey.String("GET"))
-	span.SetAttributes(semconv.HTTPURLKey.String("/users"))
-	span.SetAttributes(semconv.ServiceNameKey.String("user-service"))
-	// Call the user service
-	userdetails, err := UserService(ctx)
+	span.SetAttributes(semconv.ServiceNameKey.String("App1"))
+	// Call the service layer
+	resp, err := ServiceLayer(ctx)
 	if err != nil {
 		span.RecordError(err)
 		span.SetAttributes(semconv.HTTPStatusCodeKey.Int(500))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error calling authn service"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error calling app2 service"})
 		return
 	}
-	span.AddEvent("Successfully verfied the request from authn service")
-	span.AddEvent("user details fetched")
-	span.SetStatus(codes.Ok, "User details fetched successfully")
-	c.JSON(http.StatusOK, userdetails)
+	span.AddEvent("Successfully processed the request in app1")
+	span.AddEvent("Successfully fetched records")
+	span.SetStatus(codes.Ok, "Successfully fetched records")
+	c.JSON(http.StatusOK, resp)
 }

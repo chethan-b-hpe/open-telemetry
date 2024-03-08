@@ -30,8 +30,9 @@ docker run --rm --name jaeger \
 
 ```go
 export OTEL_SERVICE_NAME=vipin-nr-service
-export OTEL_EXPORTER_OTLP_HEADERS=api-key=5ff9356f375ebf68cd1d3879450a9ec1FFFFNRAL
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.nr-data.net
+vipin - export OTEL_EXPORTER_OTLP_HEADERS=api-key=5ff9356f375ebf68cd1d3879450a9ec1FFFFNRAL
+chandan - export OTEL_EXPORTER_OTLP_HEADERS=api-key=46c7e0df19b313a7ed3dfc78c7dea347FFFFNRAL
+export OTEL_EXPORTER_OTLP_ENDPOINT='https://otlp.nr-data.net'
 export OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT=4095
 ```
 
